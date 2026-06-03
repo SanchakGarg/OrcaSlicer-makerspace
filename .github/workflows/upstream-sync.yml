@@ -1,0 +1,119 @@
+name: Sync with upstream OrcaSlicer
+
+# Runs weekly and on manual trigger.
+# Strategy:
+#   - If upstream/main merges cleanly → auto-push to main (no PR, no review needed)
+#   - If there are conflicts     → create a draft PR so you can resolve manually
+#
+# Files most likely to conflict (Makerspace additions):
+#   src/libslic3r/AppConfig.hpp/cpp         — MAKERSPACE BEGIN/END blocks
+#   src/slic3r/Utils/NetworkAgentFactory.*  — "makerspace" provider case
+#   src/slic3r/GUI/Preferences.cpp          — Makerspace tab
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Every Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Merge upstream into fork
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/SoftFever/OrcaSlicer.git || true
+          git fetch upstream main --no-tags
+
+      - name: Check commits ahead
+        id: check
+        run: |
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "Upstream is $BEHIND commit(s) ahead of fork."
+
+      - name: Already up to date
+        if: steps.check.outputs.behind == '0'
+        run: echo "Fork is already up to date. Nothing to do."
+
+      - name: Attempt clean merge
+        if: steps.check.outputs.behind != '0'
+        id: merge
+        run: |
+          # Try the merge without committing so we can inspect conflicts first
+          if git merge --no-commit --no-ff upstream/main 2>&1; then
+            # No conflicts — finalise the commit
+            git commit -m "chore: sync ${{ steps.check.outputs.behind }} upstream commit(s) from OrcaSlicer
+
+          Auto-merged by upstream-sync workflow.
+          Upstream: https://github.com/SoftFever/OrcaSlicer" || echo "Nothing new to commit"
+            git push origin main
+            echo "status=merged" >> "$GITHUB_OUTPUT"
+          else
+            # Conflicts detected — abort and fall through to PR creation
+            git merge --abort
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create conflict-resolution branch
+        if: steps.check.outputs.behind != '0' && steps.merge.outputs.status == 'conflict'
+        id: branch
+        run: |
+          BRANCH="upstream-sync/$(date +%Y-%m-%d)"
+          git checkout -b "$BRANCH"
+          # Merge keeping our side for conflicts so the branch at least compiles;
+          # the PR description tells the reviewer exactly what needs manual attention.
+          git merge -X ours --no-edit upstream/main || true
+          git add -A
+          git commit -m "chore: upstream sync – conflicts need resolution" || true
+          git push origin "$BRANCH" --force
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Open conflict PR
+        if: steps.check.outputs.behind != '0' && steps.merge.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --draft \
+            --title "chore: upstream sync — CONFLICTS need resolution ($(date +%Y-%m-%d))" \
+            --body "$(cat <<'EOF'
+          ## Upstream sync — merge conflicts detected
+
+          The auto-merge failed. This branch was created with **our side winning all conflicts** so it compiles, but upstream changes inside the conflicting hunks are lost. You must review and fix them.
+
+          ### Steps
+          1. \`git fetch origin && git checkout ${{ steps.branch.outputs.branch }}\`
+          2. \`git log --oneline main..upstream/main\` — read what upstream changed
+          3. For each file below, check what upstream changed and fold it into the Makerspace additions
+          4. Commit, push, then merge this PR
+
+          ### Files most likely to need attention
+          | File | Why |
+          |------|-----|
+          | \`src/libslic3r/AppConfig.hpp\` | Makerspace config constants added near line 34 |
+          | \`src/libslic3r/AppConfig.cpp\` | Makerspace defaults + provider registration |
+          | \`src/slic3r/Utils/NetworkAgentFactory.hpp\` | \`"makerspace"\` case in \`create_cloud_agent\` |
+          | \`src/slic3r/Utils/NetworkAgentFactory.cpp\` | Agent config wiring |
+          | \`src/slic3r/GUI/Preferences.cpp\` | Makerspace tab (lines marked MAKERSPACE BEGIN/END) |
+
+          Upstream: ${{ steps.check.outputs.behind }} commit(s) ahead of fork.
+          EOF
+          )"

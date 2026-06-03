@@ -17,7 +17,9 @@
 #include "Widgets/RadioGroup.hpp"
 #include "slic3r/Utils/bambu_networking.hpp"
 #include "slic3r/Utils/NetworkAgent.hpp"
+#include "slic3r/Utils/MakerspaceAgent.hpp"
 #include "DownloadProgressDialog.hpp"
+#include <nlohmann/json.hpp>
 
 #ifdef __WINDOWS__
 #ifdef _MSW_DARK_MODE
@@ -1904,6 +1906,202 @@ void PreferencesDialog::create_items()
 
     g_sizer->AddSpacer(FromDIP(10));
     sizer_page->Add(g_sizer, 0, wxEXPAND);
+
+    // MAKERSPACE BEGIN
+    //////////////////////////
+    //// MAKERSPACE TAB
+    /////////////////////////////////////
+    m_pref_tabs->AppendItem(_L("Makerspace"));
+    f_sizers.push_back(new wxFlexGridSizer(1, 1, v_gap, 0));
+    g_sizer = f_sizers.back();
+    g_sizer->AddGrowableCol(0, 1);
+
+    //// MAKERSPACE > Server Configuration
+    g_sizer->Add(create_item_title(_L("Supabase Server")), 1, wxEXPAND);
+
+    auto item_ms_url = create_item_input(
+        _L("Project URL"), "", _L("Your Supabase project URL (e.g. https://xxx.supabase.co)"),
+        SETTING_MAKERSPACE_URL,
+        [](wxString /*val*/) {
+            wxGetApp().app_config->save();
+        });
+    g_sizer->Add(item_ms_url);
+
+    auto item_ms_key = create_item_input(
+        _L("Anon key"), "", _L("Your Supabase project's public anon key"),
+        SETTING_MAKERSPACE_ANON_KEY,
+        [](wxString /*val*/) {
+            wxGetApp().app_config->save();
+        });
+    g_sizer->Add(item_ms_key);
+
+    auto item_ms_test = create_item_button(
+        _L("Connection"), _L("Test"), _L("Check connectivity to the Supabase project"), "",
+        [this]() {
+            auto* agent_raw = wxGetApp().getAgent();
+            if (!agent_raw) {
+                MessageDialog dlg(this, _L("Network agent not initialised."), _L("Makerspace"), wxOK | wxICON_WARNING);
+                dlg.ShowModal();
+                return;
+            }
+            // Update agent config with current text-field values before testing
+            auto ms_shared = agent_raw->get_cloud_agent(MAKERSPACE_CLOUD_PROVIDER);
+            auto* ms = dynamic_cast<MakerspaceAgent*>(ms_shared.get());
+            if (ms) {
+                ms->set_supabase_url(app_config->get(SETTING_MAKERSPACE_URL));
+                ms->set_supabase_anon_key(app_config->get(SETTING_MAKERSPACE_ANON_KEY));
+                int rc = ms->connect_server();
+                if (rc == 0) {
+                    MessageDialog dlg(this, _L("Connected successfully."), _L("Makerspace"), wxOK | wxICON_INFORMATION);
+                    dlg.ShowModal();
+                } else {
+                    MessageDialog dlg(this, _L("Could not reach the Supabase server. Check your URL and anon key."), _L("Makerspace"), wxOK | wxICON_ERROR);
+                    dlg.ShowModal();
+                }
+            } else {
+                // Agent not registered yet — add it
+                wxGetApp().app_config->add_cloud_provider(MAKERSPACE_CLOUD_PROVIDER);
+                wxGetApp().app_config->save();
+                MessageDialog dlg(this, _L("Makerspace provider registered. Please restart OrcaSlicer for changes to take effect."), _L("Makerspace"), wxOK | wxICON_INFORMATION);
+                dlg.ShowModal();
+            }
+        });
+    g_sizer->Add(item_ms_test);
+
+    //// MAKERSPACE > Account
+    g_sizer->Add(create_item_title(_L("Account")), 1, wxEXPAND);
+
+    // Status label (updated dynamically)
+    {
+        auto status_sizer = new wxBoxSizer(wxHORIZONTAL);
+        status_sizer->AddSpacer(FromDIP(DESIGN_LEFT_MARGIN));
+        m_makerspace_status_text = new wxStaticText(m_parent, wxID_ANY, _L("Not logged in"),
+            wxDefaultPosition, DESIGN_TITLE_SIZE, wxST_NO_AUTORESIZE | wxST_ELLIPSIZE_END);
+        m_makerspace_status_text->SetFont(::Label::Body_14);
+        m_makerspace_status_text->SetForegroundColour(DESIGN_GRAY600_COLOR);
+
+        // Populate from agent if already logged in
+        {
+            auto* na = wxGetApp().getAgent();
+            if (na) {
+                auto ms_shared = na->get_cloud_agent(MAKERSPACE_CLOUD_PROVIDER);
+                auto* ms = dynamic_cast<MakerspaceAgent*>(ms_shared.get());
+                if (ms && ms->is_user_login())
+                    m_makerspace_status_text->SetLabel(
+                        wxString::Format(_L("Logged in as %s"), ms->get_user_name()));
+            }
+        }
+        status_sizer->Add(m_makerspace_status_text, 0, wxALIGN_CENTER_VERTICAL);
+        g_sizer->Add(status_sizer, 0, wxTOP | wxBOTTOM, FromDIP(3));
+    }
+
+    auto item_ms_login = create_item_button(
+        _L("Account"), _L("Login"), _L("Sign in to your Makerspace account"), "",
+        [this]() {
+            // Simple inline login dialog
+            wxDialog dlg(this, wxID_ANY, _L("Makerspace Login"),
+                wxDefaultPosition, wxSize(FromDIP(340), FromDIP(200)));
+            auto outer = new wxBoxSizer(wxVERTICAL);
+            auto grid  = new wxFlexGridSizer(2, 2, FromDIP(6), FromDIP(12));
+            grid->AddGrowableCol(1, 1);
+
+            auto lbl_email = new wxStaticText(&dlg, wxID_ANY, _L("Email:"));
+            auto txt_email = new wxTextCtrl(&dlg, wxID_ANY, wxEmptyString,
+                wxDefaultPosition, wxSize(FromDIP(220), -1));
+            auto lbl_pass  = new wxStaticText(&dlg, wxID_ANY, _L("Password:"));
+            auto txt_pass  = new wxTextCtrl(&dlg, wxID_ANY, wxEmptyString,
+                wxDefaultPosition, wxSize(FromDIP(220), -1), wxTE_PASSWORD);
+
+            auto lbl_status = new wxStaticText(&dlg, wxID_ANY, wxEmptyString);
+            lbl_status->SetForegroundColour(*wxRED);
+
+            grid->Add(lbl_email, 0, wxALIGN_CENTER_VERTICAL);
+            grid->Add(txt_email, 1, wxEXPAND);
+            grid->Add(lbl_pass,  0, wxALIGN_CENTER_VERTICAL);
+            grid->Add(txt_pass,  1, wxEXPAND);
+
+            auto btn_sizer = dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL);
+            outer->Add(grid,       0, wxEXPAND | wxALL,    FromDIP(16));
+            outer->Add(lbl_status, 0, wxLEFT,               FromDIP(16));
+            outer->Add(btn_sizer,  0, wxALIGN_RIGHT | wxALL, FromDIP(8));
+            dlg.SetSizer(outer);
+            dlg.Fit();
+
+            dlg.FindWindowById(wxID_OK)->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) {
+                std::string email = txt_email->GetValue().ToStdString();
+                std::string pass  = txt_pass->GetValue().ToStdString();
+                if (email.empty() || pass.empty()) {
+                    lbl_status->SetLabel(_L("Email and password are required."));
+                    return;
+                }
+
+                lbl_status->SetLabel(_L("Logging in..."));
+                dlg.Update();
+
+                nlohmann::json creds;
+                creds["email"]    = email;
+                creds["password"] = pass;
+
+                auto* na = wxGetApp().getAgent();
+                if (!na) { lbl_status->SetLabel(_L("Network agent unavailable.")); return; }
+
+                int rc = na->change_user(creds.dump(), MAKERSPACE_CLOUD_PROVIDER);
+                if (rc == 0) {
+                    if (m_makerspace_status_text)
+                        m_makerspace_status_text->SetLabel(
+                            wxString::Format(_L("Logged in as %s"), email));
+                    dlg.EndModal(wxID_OK);
+                } else {
+                    lbl_status->SetLabel(_L("Login failed. Check your credentials."));
+                }
+            });
+
+            dlg.ShowModal();
+        });
+    g_sizer->Add(item_ms_login);
+
+    auto item_ms_logout = create_item_button(
+        _L(""), _L("Logout"), _L("Sign out of your Makerspace account"), "",
+        [this]() {
+            auto* na = wxGetApp().getAgent();
+            if (!na) return;
+            na->user_logout(true, MAKERSPACE_CLOUD_PROVIDER);
+            if (m_makerspace_status_text)
+                m_makerspace_status_text->SetLabel(_L("Not logged in"));
+        });
+    g_sizer->Add(item_ms_logout);
+
+    //// MAKERSPACE > Sync Settings
+    g_sizer->Add(create_item_title(_L("Sync")), 1, wxEXPAND);
+
+    auto item_ms_auto_sync = create_item_checkbox(
+        _L("Enable Makerspace auto-sync"),
+        _L("Automatically sync printer, filament, and process presets to your Makerspace account on startup."),
+        SETTING_MAKERSPACE_AUTO_SYNC);
+    g_sizer->Add(item_ms_auto_sync);
+
+    //// MAKERSPACE > Local-only presets
+    g_sizer->Add(create_item_title(_L("Local-only Presets")), 1, wxEXPAND);
+
+    auto item_ms_local_only = create_item_input(
+        _L("Exclude from sync"), "",
+        _L("Semicolon-separated preset names that will never be uploaded to the cloud (e.g. MyPrinter;TestFilament)"),
+        SETTING_MAKERSPACE_LOCAL_ONLY,
+        [](wxString /*val*/) {
+            wxGetApp().app_config->save();
+            // Propagate to agent if running
+            auto* na = wxGetApp().getAgent();
+            if (!na) return;
+            auto ms_shared = na->get_cloud_agent(MAKERSPACE_CLOUD_PROVIDER);
+            auto* ms = dynamic_cast<MakerspaceAgent*>(ms_shared.get());
+            if (ms)
+                ms->set_local_only_presets(wxGetApp().app_config->get(SETTING_MAKERSPACE_LOCAL_ONLY));
+        });
+    g_sizer->Add(item_ms_local_only);
+
+    g_sizer->AddSpacer(FromDIP(10));
+    sizer_page->Add(g_sizer, 0, wxEXPAND);
+    // MAKERSPACE END
 
     /////////////////////////////////////
     //////////////////////////

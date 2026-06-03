@@ -76,6 +76,9 @@ public:
     ::TextInput *m_backup_interval_textinput = {nullptr};
     ::ComboBox * m_network_version_combo     = {nullptr};
     wxBoxSizer * m_network_version_sizer     = {nullptr};
+    // MAKERSPACE BEGIN
+    wxStaticText* m_makerspace_status_text   = {nullptr};
+    // MAKERSPACE END
     std::vector<NetworkLibraryVersionInfo> m_available_versions;
 
     wxString m_developer_mode_def;

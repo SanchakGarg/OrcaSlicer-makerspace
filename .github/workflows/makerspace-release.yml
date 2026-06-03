@@ -1,0 +1,172 @@
+name: Makerspace Release
+
+# Runs after "Build all" completes successfully on main.
+# Downloads the artifacts that workflow already built (no duplicate compilation)
+# and publishes them as a rolling "makerspace-latest" GitHub release.
+#
+# A new versioned tag (makerspace-vX.Y.Z-YYYYMMDD) is also created so every
+# build is permanently archived and can be rolled back to.
+
+on:
+  workflow_run:
+    workflows: ["Build all"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:   # manual trigger for re-publishing without a new build
+
+jobs:
+  release:
+    name: Publish Makerspace release
+    runs-on: ubuntu-latest
+    # Only publish when the build actually succeeded
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout (for version.inc)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          raw=$(grep 'set(SoftFever_VERSION' version.inc | cut -d '"' -f2)
+          date=$(date +'%Y%m%d')
+          echo "raw=$raw"        >> "$GITHUB_OUTPUT"
+          echo "ver=V${raw}"     >> "$GITHUB_OUTPUT"
+          echo "date=$date"      >> "$GITHUB_OUTPUT"
+          echo "tag=makerspace-v${raw}-${date}"          >> "$GITHUB_OUTPUT"
+          echo "release_name=Makerspace OrcaSlicer v${raw} (${date})" >> "$GITHUB_OUTPUT"
+
+      # ── Download artifacts from the triggering "Build all" run ───────────────
+      # workflow_dispatch re-uses the most recent successful run's artifacts.
+      - name: Resolve run ID
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Find the most recent successful "Build all" run on main
+            RUN_ID=$(gh run list \
+              --workflow "Build all" \
+              --branch main \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        continue-on-error: true   # skip gracefully if Windows build was skipped
+        with:
+          name: OrcaSlicer_Windows_${{ steps.ver.outputs.ver }}
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: Download Windows portable zip
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: OrcaSlicer_Windows_${{ steps.ver.outputs.ver }}_portable
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: Download macOS universal DMG
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: OrcaSlicer_Mac_universal_${{ steps.ver.outputs.ver }}
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: Download Linux AppImage
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: OrcaSlicer_Linux_ubuntu_2404_${{ steps.ver.outputs.ver }}
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: List downloaded artifacts
+        run: find release/ -type f | sort
+
+      - name: Rename artifacts with Makerspace prefix
+        shell: bash
+        run: |
+          cd release
+          for f in OrcaSlicer_*; do
+            [ -f "$f" ] || continue
+            mv "$f" "Makerspace_${f}"
+          done
+          ls -lh
+
+      # ── Rolling "makerspace-latest" pre-release (always at this tag) ────────
+      - name: Update rolling latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: makerspace-latest
+          name: "Makerspace OrcaSlicer — latest build"
+          prerelease: true
+          make_latest: false
+          body: |
+            **Automatically updated on every successful build of `main`.**
+
+            This is the most recent Makerspace build of OrcaSlicer.
+            For a stable tagged build, see the versioned releases below.
+
+            | Platform | File |
+            |----------|------|
+            | Windows  | `Makerspace_OrcaSlicer_Windows_*.exe` (installer) or `*_portable.zip` |
+            | macOS    | `Makerspace_OrcaSlicer_Mac_universal_*.dmg` |
+            | Linux    | `Makerspace_OrcaSlicer_Linux_ubuntu_2404_*.AppImage` |
+
+            **OrcaSlicer version:** ${{ steps.ver.outputs.raw }}
+            **Build date:** ${{ steps.ver.outputs.date }}
+
+            ### Makerspace features in this build
+            - Supabase profile sync (printer / filament / process)
+            - Admin-managed shared profiles for all makerspace members
+            - Per-preset local-only flag (never uploaded to the cloud)
+            - Login / logout from Preferences → Makerspace tab
+          files: release/**/*
+
+      # ── Versioned archived release (one per build, permanent) ────────────────
+      - name: Create versioned archived release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.release_name }}
+          prerelease: false
+          make_latest: true
+          body: |
+            Makerspace OrcaSlicer **v${{ steps.ver.outputs.raw }}** built on ${{ steps.ver.outputs.date }}.
+
+            | Platform | File |
+            |----------|------|
+            | Windows  | `Makerspace_OrcaSlicer_Windows_*.exe` (installer) or `*_portable.zip` |
+            | macOS    | `Makerspace_OrcaSlicer_Mac_universal_*.dmg` |
+            | Linux    | `Makerspace_OrcaSlicer_Linux_ubuntu_2404_*.AppImage` |
+
+            ### Makerspace features
+            - Supabase profile sync (printer / filament / process presets)
+            - Admin-managed shared profiles pulled by all members
+            - Per-preset local-only flag (excluded from cloud sync)
+            - Login / logout in Preferences → Makerspace tab
+            - Upstream: SoftFever/OrcaSlicer v${{ steps.ver.outputs.raw }}
+          files: release/**/*

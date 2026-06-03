@@ -30,6 +30,14 @@ using namespace nlohmann;
 #define SETTING_NETWORK_PLUGIN_REMIND_LATER "network_plugin_remind_later"
 #define SETTING_USE_ENCRYPTED_TOKEN_FILE "use_encrypted_token_file"
 #define SETTING_CLOUD_PROVIDERS "cloud_providers"
+
+// MAKERSPACE BEGIN — Supabase sync settings
+#define SETTING_MAKERSPACE_URL           "makerspace_supabase_url"
+#define SETTING_MAKERSPACE_ANON_KEY      "makerspace_supabase_anon_key"
+#define SETTING_MAKERSPACE_LOCAL_ONLY    "makerspace_local_only_presets"
+#define SETTING_MAKERSPACE_AUTO_SYNC     "makerspace_auto_sync"
+// MAKERSPACE END
+
 #define SETTING_OPENGL_AA_SAMPLES "opengl_antialiasing_samples"
 #define SETTING_OPENGL_FXAA_ENABLED "opengl_fxaa_enabled"
 #define SETTING_OPENGL_FPS_CAP "opengl_fps_cap"

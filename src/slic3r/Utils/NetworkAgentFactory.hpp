@@ -7,6 +7,7 @@
 #include "OrcaCloudServiceAgent.hpp"
 #include "BBLCloudServiceAgent.hpp"
 #include "BBLNetworkPlugin.hpp"
+#include "MakerspaceAgent.hpp"
 #include "libslic3r/AppConfig.hpp"
 #include <memory>
 #include <string>
@@ -144,6 +145,10 @@ public:
                 return nullptr;
             }
             return std::make_shared<BBLCloudServiceAgent>();
+        // MAKERSPACE BEGIN
+        } else if (provider == MAKERSPACE_CLOUD_PROVIDER) {
+            return std::make_shared<MakerspaceAgent>();
+        // MAKERSPACE END
         }
         return nullptr;
     }

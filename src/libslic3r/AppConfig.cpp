@@ -452,6 +452,18 @@ void AppConfig::set_defaults()
         set_bool("sync_user_preset", false);
     }
 
+    // MAKERSPACE BEGIN — defaults for Supabase sync
+    if (get(SETTING_MAKERSPACE_AUTO_SYNC).empty())
+        set_bool(SETTING_MAKERSPACE_AUTO_SYNC, false);
+    if (get(SETTING_MAKERSPACE_URL).empty())
+        set(SETTING_MAKERSPACE_URL, "https://tocbkjjlgayiynmebhdg.supabase.co");
+    if (get(SETTING_MAKERSPACE_ANON_KEY).empty())
+        set(SETTING_MAKERSPACE_ANON_KEY,
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+            ".eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRvY2JrampsZ2F5aXlubWViaGRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDQ0NTQsImV4cCI6MjA5NjA4MDQ1NH0"
+            ".bxhpLxjtlvWxytW0QHnUfoWuWOHp0kPACgOPcDIA7lI");
+    // MAKERSPACE END
+
     if (get("keyboard_supported").empty()) {
         set("keyboard_supported", std::string("none/alt/control/shift"));
     }
@@ -861,6 +873,9 @@ std::string AppConfig::load()
                 set(SETTING_CLOUD_PROVIDERS, "orca");
             }
         }
+        // MAKERSPACE BEGIN — always include makerspace provider
+        add_cloud_provider("makerspace");
+        // MAKERSPACE END
     }
 
     // Override missing or keys with their defaults.

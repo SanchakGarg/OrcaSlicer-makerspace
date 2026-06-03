@@ -3,6 +3,7 @@
 #include "ICloudServiceAgent.hpp"
 #include "BBLPrinterAgent.hpp"
 #include "OrcaPrinterAgent.hpp"
+#include "MakerspaceAgent.hpp"
 #include "QidiPrinterAgent.hpp"
 #include "SnapmakerPrinterAgent.hpp"
 #include "MoonrakerPrinterAgent.hpp"
@@ -176,6 +177,16 @@ std::unique_ptr<NetworkAgent> create_agent_from_config(const std::string& log_di
                 continue; // Primary agent already created above
             auto third_party_agent = NetworkAgentFactory::create_cloud_agent(provider, log_dir);
             if (third_party_agent) {
+                // MAKERSPACE BEGIN — configure Supabase agent from AppConfig
+                if (provider == MAKERSPACE_CLOUD_PROVIDER) {
+                    auto* ms = dynamic_cast<MakerspaceAgent*>(third_party_agent.get());
+                    if (ms) {
+                        ms->set_supabase_url(app_config->get(SETTING_MAKERSPACE_URL));
+                        ms->set_supabase_anon_key(app_config->get(SETTING_MAKERSPACE_ANON_KEY));
+                        ms->set_local_only_presets(app_config->get(SETTING_MAKERSPACE_LOCAL_ONLY));
+                    }
+                }
+                // MAKERSPACE END
                 agent->add_cloud_agent(provider, std::move(third_party_agent));
                 BOOST_LOG_TRIVIAL(info) << "Initialized third-party cloud agent: " << provider;
             }
