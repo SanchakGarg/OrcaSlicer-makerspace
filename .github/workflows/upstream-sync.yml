@@ -2,7 +2,7 @@ name: Sync with upstream OrcaSlicer
 
 # Runs weekly and on manual trigger.
 # Strategy:
-#   - If upstream/main merges cleanly → auto-push to main (no PR, no review needed)
+#   - If upstream/main merges cleanly → auto-push to main, then trigger "Build all"
 #   - If there are conflicts     → create a draft PR so you can resolve manually
 #
 # Files most likely to conflict (Makerspace additions):
@@ -22,6 +22,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write   # needed to trigger "Build all" after merge
 
     steps:
       - name: Checkout fork
@@ -70,6 +71,15 @@ jobs:
             echo "status=conflict" >> "$GITHUB_OUTPUT"
           fi
 
+      # GITHUB_TOKEN pushes don't trigger other workflows, so we kick off the
+      # build explicitly after a successful merge so releases are published.
+      - name: Trigger build after merge
+        if: steps.check.outputs.behind != '0' && steps.merge.outputs.status == 'merged'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run build_all.yml --ref main
+
       - name: Create conflict-resolution branch
         if: steps.check.outputs.behind != '0' && steps.merge.outputs.status == 'conflict'
         id: branch
@@ -103,7 +113,7 @@ jobs:
           1. \`git fetch origin && git checkout ${{ steps.branch.outputs.branch }}\`
           2. \`git log --oneline main..upstream/main\` — read what upstream changed
           3. For each file below, check what upstream changed and fold it into the Makerspace additions
-          4. Commit, push, then merge this PR
+          4. Commit, push, then merge this PR (that push WILL trigger a new build)
 
           ### Files most likely to need attention
           | File | Why |
