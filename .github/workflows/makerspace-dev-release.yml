@@ -1,0 +1,142 @@
+name: Makerspace Dev Release
+
+# Publishes a rolling dev build on every commit to main, even if unit tests
+# failed — as long as compilation produced artifacts.
+# Stable releases (makerspace-latest / versioned tags) still require full
+# test passage and are handled by makerspace-release.yml.
+
+on:
+  workflow_run:
+    workflows: ["Build all"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  dev-release:
+    name: Publish dev build
+    runs-on: ubuntu-latest
+    # Run whenever the build finished (not cancelled/skipped), even if tests failed.
+    # Cancelled means the build never produced artifacts — skip those.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion != 'cancelled' &&
+       github.event.workflow_run.conclusion != 'skipped' &&
+       github.event.workflow_run.head_branch == 'main')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout (for version.inc)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          raw=$(grep 'set(SoftFever_VERSION' version.inc | cut -d '"' -f2)
+          date=$(date +'%Y%m%d')
+          sha="${{ github.event.workflow_run.head_sha || github.sha }}"
+          echo "raw=$raw"    >> "$GITHUB_OUTPUT"
+          echo "ver=V${raw}" >> "$GITHUB_OUTPUT"
+          echo "date=$date"  >> "$GITHUB_OUTPUT"
+          echo "sha=${sha:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve run ID
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            RUN_ID=$(gh run list \
+              --workflow "Build all" \
+              --branch main \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: OrcaSlicer_Windows_${{ steps.ver.outputs.ver }}
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: Download Windows portable zip
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: OrcaSlicer_Windows_${{ steps.ver.outputs.ver }}_portable
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: Download macOS universal DMG
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: OrcaSlicer_Mac_universal_${{ steps.ver.outputs.ver }}
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: Download Linux AppImage
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: OrcaSlicer_Linux_ubuntu_2404_${{ steps.ver.outputs.ver }}
+          run-id: ${{ steps.run.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release/
+
+      - name: Check at least one artifact downloaded
+        id: artifacts
+        shell: bash
+        run: |
+          count=$(find release/ -type f 2>/dev/null | wc -l)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "Found $count artifact(s)."
+          [ "$count" -gt 0 ] || { echo "No artifacts — compilation likely failed. Skipping release."; exit 0; }
+
+      - name: Rename artifacts with Makerspace prefix
+        if: steps.artifacts.outputs.count > 0
+        shell: bash
+        run: |
+          cd release
+          for f in OrcaSlicer_*; do
+            [ -f "$f" ] || continue
+            mv "$f" "Makerspace_${f}"
+          done
+          ls -lh
+
+      - name: Update rolling dev release
+        if: steps.artifacts.outputs.count > 0
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: makerspace-dev
+          name: "Makerspace OrcaSlicer — dev build (may have failing tests)"
+          prerelease: true
+          make_latest: false
+          body: |
+            **Updated on every commit to `main`.** Tests may not all pass — use the stable [`makerspace-latest`](../../releases/tag/makerspace-latest) release for production.
+
+            | Platform | File |
+            |----------|------|
+            | Windows  | `Makerspace_OrcaSlicer_Windows_*.exe` or `*_portable.zip` |
+            | macOS    | `Makerspace_OrcaSlicer_Mac_universal_*.dmg` |
+            | Linux    | `Makerspace_OrcaSlicer_Linux_ubuntu_2404_*.AppImage` |
+
+            **OrcaSlicer version:** ${{ steps.ver.outputs.raw }}
+            **Commit:** `${{ steps.ver.outputs.sha }}`
+            **Build date:** ${{ steps.ver.outputs.date }}
+          files: release/**/*
