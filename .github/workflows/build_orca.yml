@@ -292,11 +292,77 @@ jobs:
         #   WindowsSDKVersion: '10.0.26100.0\'
         run: .\build_release_vs.bat slicer
 
+      # MAKERSPACE BEGIN — Windows code signing
+      # Requires secrets: WINDOWS_SIGN_CERT_BASE64 (pfx base64) and WINDOWS_SIGN_CERT_PASSWORD
+      # Sign before cpack so the installer packages already-signed binaries.
+      # Skips silently if the secret is not set — safe for forks and PRs.
+      - name: Sign Windows executables
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        shell: pwsh
+        env:
+          CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT_BASE64) {
+            Write-Host "WINDOWS_SIGN_CERT_BASE64 not set — skipping code signing."
+            exit 0
+          }
+          $certPath = "$env:RUNNER_TEMP\makerspace_sign.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_BASE64))
+
+          # Locate signtool from the Windows SDK installed by the runner
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+            -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "x64" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { $signtool = "signtool.exe" }
+          Write-Host "Using signtool: $signtool"
+
+          $timestamp = "http://timestamp.digicert.com"
+          $exes = Get-ChildItem "${{ github.workspace }}\build" -Recurse -Filter "*.exe" |
+                  Where-Object { $_.Length -gt 0 }
+          foreach ($exe in $exes) {
+            Write-Host "Signing $($exe.FullName)"
+            & $signtool sign /fd sha256 /td sha256 /tr $timestamp `
+              /f $certPath /p $env:CERT_PASSWORD $exe.FullName
+            if ($LASTEXITCODE -ne 0) { Write-Warning "signtool failed for $($exe.FullName) (exit $LASTEXITCODE)" }
+          }
+          Remove-Item $certPath -Force
+      # MAKERSPACE END
+
       - name: Create installer Win
         if: runner.os == 'Windows' && !vars.SELF_HOSTED
         working-directory: ${{ github.workspace }}/build
         run: |
           cpack -G NSIS
+
+      # MAKERSPACE BEGIN — sign the NSIS installer itself
+      - name: Sign Windows installer
+        if: runner.os == 'Windows' && !vars.SELF_HOSTED
+        shell: pwsh
+        env:
+          CERT_BASE64: ${{ secrets.WINDOWS_SIGN_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT_BASE64) { exit 0 }
+          $certPath = "$env:RUNNER_TEMP\makerspace_sign.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:CERT_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+            -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "x64" } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { $signtool = "signtool.exe" }
+          $installer = Get-ChildItem "${{ github.workspace }}\build" -Filter "OrcaSlicer*.exe" |
+                       Select-Object -First 1 -ExpandProperty FullName
+          if ($installer) {
+            Write-Host "Signing installer: $installer"
+            & $signtool sign /fd sha256 /td sha256 /tr http://timestamp.digicert.com `
+              /f $certPath /p $env:CERT_PASSWORD $installer
+          }
+          Remove-Item $certPath -Force
+      # MAKERSPACE END
 
       - name: Pack app
         if: runner.os == 'Windows'
