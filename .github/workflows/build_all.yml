@@ -161,7 +161,9 @@ jobs:
           count=$(find . -type f | wc -l)
           echo "Artifacts found: $count"
           [ "$count" -gt 0 ] || { echo "No artifacts — skipping release."; exit 0; }
-          for f in OrcaSlicer_*; do [ -f "$f" ] && mv "$f" "Makerspace_${f}"; done
+          for f in OrcaSlicer_*.exe OrcaSlicer_*.zip OrcaSlicer_*.dmg OrcaSlicer_*.AppImage; do
+            [ -f "$f" ] && mv "$f" "Makerspace_${f}"
+          done
           ls -lh
 
       - name: Update makerspace-dev release
@@ -182,7 +184,11 @@ jobs:
             | Linux    | `Makerspace_OrcaSlicer_Linux_ubuntu_2404_*.AppImage` |
 
             **Version:** ${{ steps.ver.outputs.raw }} · **Commit:** `${{ steps.ver.outputs.sha }}` · **Date:** ${{ steps.ver.outputs.date }}
-          files: release/**/*
+          files: |
+            release/*.exe
+            release/*.zip
+            release/*.dmg
+            release/*.AppImage
   # MAKERSPACE END
 
   unit_tests:

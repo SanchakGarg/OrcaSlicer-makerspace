@@ -110,9 +110,9 @@ jobs:
         shell: bash
         run: |
           cd release
-          for f in OrcaSlicer_*; do
-            [ -f "$f" ] || continue
-            mv "$f" "Makerspace_${f}"
+          # Only rename the top-level distributable files, not subdirectory contents
+          for f in OrcaSlicer_*.exe OrcaSlicer_*.zip OrcaSlicer_*.dmg OrcaSlicer_*.AppImage; do
+            [ -f "$f" ] && mv "$f" "Makerspace_${f}"
           done
           ls -lh
 
@@ -144,7 +144,11 @@ jobs:
             - Admin-managed shared profiles for all makerspace members
             - Per-preset local-only flag (never uploaded to the cloud)
             - Login / logout from Preferences → Makerspace tab
-          files: release/**/*
+          files: |
+            release/*.exe
+            release/*.zip
+            release/*.dmg
+            release/*.AppImage
 
       # ── Versioned archived release (one per build, permanent) ────────────────
       - name: Create versioned archived release
@@ -169,4 +173,8 @@ jobs:
             - Per-preset local-only flag (excluded from cloud sync)
             - Login / logout in Preferences → Makerspace tab
             - Upstream: SoftFever/OrcaSlicer v${{ steps.ver.outputs.raw }}
-          files: release/**/*
+          files: |
+            release/*.exe
+            release/*.zip
+            release/*.dmg
+            release/*.AppImage
